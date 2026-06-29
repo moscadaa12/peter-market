@@ -11,8 +11,68 @@ const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
-app.use(cors());
+
+// ── CORS ───────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    if (origin.endsWith('.vercel.app')) return cb(null, true);
+    cb(new Error('Origen no permitido por CORS'));
+  },
+  credentials: true,
+}));
 app.use(express.json());
+
+// ── Auth Middleware ─────────────────────────────────────────────
+function decodeToken(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    return JSON.parse(Buffer.from(parts[1], 'base64').toString());
+  } catch { return null; }
+}
+
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    const payload = decodeToken(header.slice(7));
+    if (payload && payload.exp * 1000 > Date.now()) {
+      req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
+    }
+  }
+  next();
+}
+
+function requireAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token requerido' });
+  }
+  const payload = decodeToken(header.slice(7));
+  if (!payload) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+  if (payload.exp * 1000 < Date.now()) {
+    return res.status(401).json({ error: 'Token expirado' });
+  }
+  req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
+  next();
+}
+
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'No tienes permiso para esta acción' });
+    }
+    next();
+  };
+}
 
 // ── Database Pool ─────────────────────────────────────────────
 let pool;
@@ -195,7 +255,7 @@ const upload = multer({
   },
 });
 
-app.post('/api/upload', (req, res) => {
+app.post('/api/upload', requireAuth, requireRole('admin', 'empleado'), (req, res) => {
   upload.single('image')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
@@ -204,7 +264,7 @@ app.post('/api/upload', (req, res) => {
 });
 
 // ── API: Categorías ──────────────────────────────────────────
-app.get('/api/categories', async (_req, res) => {
+app.get('/api/categories', optionalAuth, async (_req, res) => {
   const { rows } = await getPool().query(`
     SELECT c.*, COUNT(p.id)::int as "productCount"
     FROM categories c
@@ -215,7 +275,7 @@ app.get('/api/categories', async (_req, res) => {
   res.json(rows);
 });
 
-app.post('/api/categories', async (req, res) => {
+app.post('/api/categories', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
   const { rows } = await getPool().query(
@@ -225,7 +285,7 @@ app.post('/api/categories', async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
-app.put('/api/categories/:id', async (req, res) => {
+app.put('/api/categories/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Categoría no encontrada' });
   const { name } = req.body;
@@ -236,7 +296,7 @@ app.put('/api/categories/:id', async (req, res) => {
   res.json(updated[0]);
 });
 
-app.delete('/api/categories/:id', async (req, res) => {
+app.delete('/api/categories/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Categoría no encontrada' });
   await getPool().query('DELETE FROM categories WHERE id = $1', [req.params.id]);
@@ -244,7 +304,7 @@ app.delete('/api/categories/:id', async (req, res) => {
 });
 
 // ── API: Productos ────────────────────────────────────────────
-app.get('/api/products', async (req, res) => {
+app.get('/api/products', optionalAuth, async (req, res) => {
   const { is_active } = req.query;
   let sql = 'SELECT * FROM products';
   const params = [];
@@ -257,13 +317,13 @@ app.get('/api/products', async (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/products/:id', async (req, res) => {
+app.get('/api/products/:id', optionalAuth, async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Producto no encontrado' });
   res.json(rows[0]);
 });
 
-app.post('/api/products', async (req, res) => {
+app.post('/api/products', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { name, category_id, price, offer_price, stock, description, image_url } = req.body;
   if (!name || !category_id || price === undefined || stock === undefined) {
     return res.status(400).json({ error: 'Faltan campos obligatorios' });
@@ -275,7 +335,7 @@ app.post('/api/products', async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
-app.put('/api/products/:id', async (req, res) => {
+app.put('/api/products/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { rows: existing } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!existing[0]) return res.status(404).json({ error: 'Producto no encontrado' });
   const { name, category_id, price, offer_price, stock, description, image_url, is_active } = req.body;
@@ -299,7 +359,7 @@ app.put('/api/products/:id', async (req, res) => {
   res.json(updated[0]);
 });
 
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/products/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Producto no encontrado' });
   await getPool().query('DELETE FROM products WHERE id = $1', [req.params.id]);
@@ -307,7 +367,7 @@ app.delete('/api/products/:id', async (req, res) => {
 });
 
 // ── API: Pedidos ──────────────────────────────────────────────
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', requireAuth, async (req, res) => {
   const { user_id } = req.query;
   let sql = 'SELECT * FROM orders';
   const params = [];
@@ -324,7 +384,7 @@ app.get('/api/orders', async (req, res) => {
   res.json(orders);
 });
 
-app.get('/api/orders/:id', async (req, res) => {
+app.get('/api/orders/:id', requireAuth, async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Pedido no encontrado' });
   const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [req.params.id]);
@@ -332,7 +392,7 @@ app.get('/api/orders/:id', async (req, res) => {
   res.json(rows[0]);
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', requireAuth, async (req, res) => {
   const { user_id, user_name, items, delivery_address, delivery_cost } = req.body;
   if (!items || !items.length) return res.status(400).json({ error: 'El pedido debe tener al menos un producto' });
   const total_amount = items.reduce((sum, i) => sum + i.price * i.quantity, 0) + (delivery_cost || 0);
@@ -365,7 +425,7 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.put('/api/orders/:id/status', async (req, res) => {
+app.put('/api/orders/:id/status', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { rows } = await getPool().query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Pedido no encontrado' });
   const { status } = req.body;
@@ -381,7 +441,7 @@ app.put('/api/orders/:id/status', async (req, res) => {
 });
 
 // ── API: Dashboard ────────────────────────────────────────────
-app.get('/api/dashboard/summary', async (_req, res) => {
+app.get('/api/dashboard/summary', requireAuth, requireRole('admin', 'empleado'), async (_req, res) => {
   const client = await getPool().connect();
   try {
     const ventasHoy = (await client.query(
@@ -406,7 +466,7 @@ app.get('/api/dashboard/summary', async (_req, res) => {
   }
 });
 
-app.get('/api/dashboard/sales-by-month', async (req, res) => {
+app.get('/api/dashboard/sales-by-month', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const year = req.query.year || new Date().getFullYear();
   const { rows } = await getPool().query(`
     SELECT EXTRACT(MONTH FROM created_at)::int as mes,
@@ -425,7 +485,7 @@ app.get('/api/dashboard/sales-by-month', async (req, res) => {
   res.json(fullYear);
 });
 
-app.get('/api/dashboard/recent-orders', async (_req, res) => {
+app.get('/api/dashboard/recent-orders', requireAuth, requireRole('admin', 'empleado'), async (_req, res) => {
   const { rows: orders } = await getPool().query(
     'SELECT * FROM orders ORDER BY created_at DESC LIMIT 5'
   );
