@@ -1,0 +1,22 @@
+{
+  "name": "Peter Market",
+  "short_name": "Peter Market",
+  "description": "Tu bodega online de confianza — Abarrotes, lácteos, snacks y más",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ef6c00",
+  "orientation": "portrait-primary",
+  "categories": ["shopping", "food", "grocery"],
+  "lang": "es-PE",
+  "icons": [
+    { "src": "/icons/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icons/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icons/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "maskable" },
+    { "src": "/icons/icon-192.svg", "type": "image/svg+xml", "sizes": "192x192" },
+    { "src": "/icons/icon-512.svg", "type": "image/svg+xml", "sizes": "512x512" }
+  ],
+  "screenshots": [],
+  "related_applications": [],
+  "prefer_related_applications": false
+}
