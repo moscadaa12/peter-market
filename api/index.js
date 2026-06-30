@@ -3,12 +3,10 @@ import multer from 'multer';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { query } from './db.js';
 import { uploadBuffer, seedAllImages } from './storage.js';
-
-const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const JWT_SECRET = process.env.JWT_SECRET || 'peter-market-dev-secret-key';
 
@@ -69,22 +67,6 @@ function requireRole(...roles) {
   };
 }
 
-// ── Database Pool ─────────────────────────────────────────────
-let pool;
-function getPool() {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 1,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 15000,
-      ssl: { rejectUnauthorized: false },
-    });
-    pool.on('error', (err) => console.error('Pool error:', err.message));
-  }
-  return pool;
-}
-
 // ── Init DB (lazy, on first request) ──────────────────────────
 let initialized = false;
 async function ensureDB(req, res, next) {
@@ -102,9 +84,7 @@ async function ensureDB(req, res, next) {
 app.use(ensureDB);
 
 async function initDB() {
-  const client = await getPool().connect();
-  try {
-    await client.query(`
+  await query(`
       CREATE TABLE IF NOT EXISTS users (
         id    SERIAL PRIMARY KEY,
         name  TEXT NOT NULL,
@@ -153,22 +133,22 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
     `);
 
-    const { rows: userCount } = await client.query('SELECT COUNT(*)::int as count FROM users');
+    const { rows: userCount } = await query('SELECT COUNT(*)::int as count FROM users');
     if (userCount[0].count === 0) {
       const hashes = await Promise.all([
         bcrypt.hash('admin123', 10),
         bcrypt.hash('empleado123', 10),
         bcrypt.hash('cliente123', 10),
       ]);
-      await client.query(
+      await query(
         'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
         ['Admin Peter', 'admin@petermarket.pe', hashes[0], 'admin']
       );
-      await client.query(
+      await query(
         'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
         ['Empleado Juan', 'empleado@petermarket.pe', hashes[1], 'empleado']
       );
-      await client.query(
+      await query(
         'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
         ['Cliente María', 'cliente@petermarket.pe', hashes[2], 'cliente']
       );
@@ -176,14 +156,14 @@ async function initDB() {
 
     const imageMap = await seedAllImages();
 
-    const { rows: catCount } = await client.query('SELECT COUNT(*)::int as count FROM categories');
+    const { rows: catCount } = await query('SELECT COUNT(*)::int as count FROM categories');
     if (catCount[0].count === 0) {
       const defaultCategories = [
         'Abarrotes', 'Lácteos', 'Snacks', 'Limpieza', 'Bebidas',
         'Panadería', 'Cuidado Personal', 'Carnes', 'Frutas y Verduras', 'Mascotas',
       ];
       for (const name of defaultCategories) {
-        await client.query('INSERT INTO categories (name) VALUES ($1)', [name]);
+        await query('INSERT INTO categories (name) VALUES ($1)', [name]);
       }
 
       const seedProducts = [
@@ -250,14 +230,12 @@ async function initDB() {
 
       for (const p of seedProducts) {
         const imgUrl = imageMap[p.img] || `/images/products/${p.img}`;
-        await client.query(
+        await query(
           'INSERT INTO products (name, category_id, price, offer_price, stock, description, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7)',
           [p.name, p.cat, p.price, p.offer ?? null, p.stock, p.desc, imgUrl]
         );
       }
     }
-  } finally {
-    client.release();
   }
 }
 
@@ -267,12 +245,12 @@ app.post('/api/auth/register', async (req, res) => {
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Faltan campos obligatorios' });
   }
-  const { rows: existing } = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
+  const { rows: existing } = await query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing[0]) {
     return res.status(400).json({ error: 'El email ya está registrado' });
   }
   const hash = await bcrypt.hash(password, 10);
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at',
     [name, email, hash, 'cliente']
   );
@@ -290,7 +268,7 @@ app.post('/api/auth/login', async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
   }
-  const { rows } = await getPool().query('SELECT * FROM users WHERE email = $1', [email]);
+  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email]);
   if (!rows[0]) {
     return res.status(401).json({ error: 'Credenciales inválidas' });
   }
@@ -308,7 +286,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/auth/me', requireAuth, async (req, res) => {
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
     [req.user.id]
   );
@@ -320,7 +298,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
 // ── Users CRUD (admin only) ────────────────────────────────────
 app.get('/api/auth/users', requireAuth, requireRole('admin'), async (_req, res) => {
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'SELECT id, name, email, role, created_at FROM users ORDER BY id'
   );
   res.json(rows);
@@ -331,12 +309,12 @@ app.post('/api/auth/users', requireAuth, requireRole('admin'), async (req, res) 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Faltan campos obligatorios' });
   }
-  const { rows: existing } = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
+  const { rows: existing } = await query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing[0]) {
     return res.status(400).json({ error: 'El email ya está registrado' });
   }
   const hash = await bcrypt.hash(password, 10);
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at',
     [name, email, hash, role || 'cliente']
   );
@@ -344,24 +322,24 @@ app.post('/api/auth/users', requireAuth, requireRole('admin'), async (req, res) 
 });
 
 app.put('/api/auth/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const { rows: existing } = await getPool().query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+  const { rows: existing } = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
   if (!existing[0]) {
     return res.status(404).json({ error: 'Usuario no encontrado' });
   }
   const { name, email, role, password } = req.body;
   if (password) {
     const hash = await bcrypt.hash(password, 10);
-    await getPool().query(
+    await query(
       'UPDATE users SET name=$1, email=$2, role=$3, password_hash=$4 WHERE id=$5',
       [name || existing[0].name, email || existing[0].email, role || existing[0].role, hash, req.params.id]
     );
   } else {
-    await getPool().query(
+    await query(
       'UPDATE users SET name=$1, email=$2, role=$3 WHERE id=$4',
       [name || existing[0].name, email || existing[0].email, role || existing[0].role, req.params.id]
     );
   }
-  const { rows: updated } = await getPool().query(
+  const { rows: updated } = await query(
     'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
     [req.params.id]
   );
@@ -369,11 +347,11 @@ app.put('/api/auth/users/:id', requireAuth, requireRole('admin'), async (req, re
 });
 
 app.delete('/api/auth/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM users WHERE id = $1', [req.params.id]);
   if (!rows[0]) {
     return res.status(404).json({ error: 'Usuario no encontrado' });
   }
-  await getPool().query('DELETE FROM users WHERE id = $1', [req.params.id]);
+  await query('DELETE FROM users WHERE id = $1', [req.params.id]);
   res.json({ message: 'Usuario eliminado' });
 });
 
@@ -405,10 +383,8 @@ app.post('/api/upload', requireAuth, requireRole('admin', 'empleado'), (req, res
 // ── Health check ─────────────────────────────────────────────
 app.get('/api/health', async (_req, res) => {
   try {
-    const client = await getPool().connect();
-    const { rows } = await client.query('SELECT NOW() as time');
-    client.release();
-    res.json({ status: 'ok', db: rows[0].time });
+    const { rows } = await query('SELECT NOW() as time');
+    res.json({ status: 'ok', db: rows[0]?.time });
   } catch (err) {
     res.status(500).json({ status: 'error', message: err.message });
   }
@@ -416,7 +392,7 @@ app.get('/api/health', async (_req, res) => {
 
 // ── API: Categorías ──────────────────────────────────────────
 app.get('/api/categories', optionalAuth, async (_req, res) => {
-  const { rows } = await getPool().query(`
+  const { rows } = await query(`
     SELECT c.*, COUNT(p.id)::int as "productCount"
     FROM categories c
     LEFT JOIN products p ON p.category_id = c.id AND p.is_active = 1
@@ -429,7 +405,7 @@ app.get('/api/categories', optionalAuth, async (_req, res) => {
 app.post('/api/categories', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: 'El nombre es obligatorio' });
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'INSERT INTO categories (name) VALUES ($1) RETURNING *',
     [name]
   );
@@ -437,10 +413,10 @@ app.post('/api/categories', requireAuth, requireRole('admin', 'empleado'), async
 });
 
 app.put('/api/categories/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Categoría no encontrada' });
   const { name } = req.body;
-  const { rows: updated } = await getPool().query(
+  const { rows: updated } = await query(
     'UPDATE categories SET name = $1 WHERE id = $2 RETURNING *',
     [name || rows[0].name, req.params.id]
   );
@@ -448,9 +424,9 @@ app.put('/api/categories/:id', requireAuth, requireRole('admin', 'empleado'), as
 });
 
 app.delete('/api/categories/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Categoría no encontrada' });
-  await getPool().query('DELETE FROM categories WHERE id = $1', [req.params.id]);
+  await query('DELETE FROM categories WHERE id = $1', [req.params.id]);
   res.json({ message: 'Categoría eliminada' });
 });
 
@@ -464,12 +440,12 @@ app.get('/api/products', optionalAuth, async (req, res) => {
     params.push(Number(is_active));
   }
   sql += ' ORDER BY id';
-  const { rows } = await getPool().query(sql, params);
+  const { rows } = await query(sql, params);
   res.json(rows);
 });
 
 app.get('/api/products/:id', optionalAuth, async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Producto no encontrado' });
   res.json(rows[0]);
 });
@@ -479,7 +455,7 @@ app.post('/api/products', requireAuth, requireRole('admin', 'empleado'), async (
   if (!name || !category_id || price === undefined || stock === undefined) {
     return res.status(400).json({ error: 'Faltan campos obligatorios' });
   }
-  const { rows } = await getPool().query(
+  const { rows } = await query(
     'INSERT INTO products (name, category_id, price, offer_price, stock, description, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
     [name, category_id, price, offer_price ?? null, stock, description ?? '', image_url ?? '']
   );
@@ -487,10 +463,10 @@ app.post('/api/products', requireAuth, requireRole('admin', 'empleado'), async (
 });
 
 app.put('/api/products/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const { rows: existing } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+  const { rows: existing } = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!existing[0]) return res.status(404).json({ error: 'Producto no encontrado' });
   const { name, category_id, price, offer_price, stock, description, image_url, is_active } = req.body;
-  const { rows: updated } = await getPool().query(`
+  const { rows: updated } = await query(`
     UPDATE products SET
       name = COALESCE($1, name),
       category_id = COALESCE($2, category_id),
@@ -511,9 +487,9 @@ app.put('/api/products/:id', requireAuth, requireRole('admin', 'empleado'), asyn
 });
 
 app.delete('/api/products/:id', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Producto no encontrado' });
-  await getPool().query('DELETE FROM products WHERE id = $1', [req.params.id]);
+  await query('DELETE FROM products WHERE id = $1', [req.params.id]);
   res.json({ message: 'Producto eliminado' });
 });
 
@@ -527,18 +503,18 @@ app.get('/api/orders', requireAuth, async (req, res) => {
     params.push(Number(user_id));
   }
   sql += ' ORDER BY id DESC';
-  const { rows: orders } = await getPool().query(sql, params);
+  const { rows: orders } = await query(sql, params);
   for (const order of orders) {
-    const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
+    const { rows: items } = await query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
     order.items = items;
   }
   res.json(orders);
 });
 
 app.get('/api/orders/:id', requireAuth, async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Pedido no encontrado' });
-  const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [req.params.id]);
+  const { rows: items } = await query('SELECT * FROM order_details WHERE order_id = $1', [req.params.id]);
   rows[0].items = items;
   res.json(rows[0]);
 });
@@ -549,80 +525,87 @@ app.post('/api/orders', requireAuth, async (req, res) => {
   const total_amount = items.reduce((sum, i) => sum + i.price * i.quantity, 0) + (delivery_cost || 0);
   const cost = delivery_cost || 0;
 
-  const client = await getPool().connect();
-  try {
-    await client.query('BEGIN');
-    const { rows: orderRows } = await client.query(
-      'INSERT INTO orders (user_id, user_name, total_amount, delivery_address, delivery_cost, status) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
-      [user_id ?? null, user_name ?? 'Cliente', total_amount, delivery_address ?? '', cost, 'pendiente']
-    );
-    const orderId = orderRows[0].id;
-    for (const item of items) {
-      await client.query(
-        'INSERT INTO order_details (order_id, product_id, product_name, quantity, unit_price, subtotal) VALUES ($1,$2,$3,$4,$5,$6)',
-        [orderId, item.id, item.name, item.quantity, item.price, item.price * item.quantity]
-      );
-    }
-    await client.query('COMMIT');
-    const { rows: details } = await client.query('SELECT * FROM order_details WHERE order_id = $1', [orderId]);
-    orderRows[0].items = details;
-    res.status(201).json(orderRows[0]);
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Order creation failed:', err);
-    res.status(500).json({ error: 'Error al crear el pedido' });
-  } finally {
-    client.release();
-  }
+  const itemsJson = JSON.stringify(items.map(i => ({
+    product_id: i.id,
+    product_name: i.name,
+    quantity: i.quantity,
+    unit_price: i.price,
+    subtotal: i.price * i.quantity,
+  })));
+
+  const { rows } = await query(`
+    WITH items_data AS (
+      SELECT * FROM jsonb_to_recordset($6::jsonb)
+        AS x(product_id INT, product_name TEXT, quantity INT, unit_price NUMERIC, subtotal NUMERIC)
+    ),
+    o AS (
+      INSERT INTO orders (user_id, user_name, total_amount, delivery_address, delivery_cost, status)
+      VALUES ($1, $2, $3, $4, $5, 'pendiente')
+      RETURNING *
+    ),
+    details AS (
+      INSERT INTO order_details (order_id, product_id, product_name, quantity, unit_price, subtotal)
+      SELECT o.id, i.* FROM o, items_data i
+      RETURNING *
+    )
+    SELECT o.*, COALESCE((SELECT jsonb_agg(row_to_json(d.*)) FROM details d), '[]'::jsonb) AS items
+    FROM o
+  `, [
+    user_id ?? null,
+    user_name ?? 'Cliente',
+    total_amount,
+    delivery_address ?? '',
+    cost,
+    itemsJson,
+  ]);
+
+  res.status(201).json(rows[0]);
 });
 
 app.put('/api/orders/:id/status', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const { rows } = await getPool().query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  const { rows } = await query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Pedido no encontrado' });
   const { status } = req.body;
   const validStatuses = ['pendiente', 'confirmado', 'enviado', 'entregado', 'cancelado'];
   if (!validStatuses.includes(status)) return res.status(400).json({ error: 'Estado inválido' });
-  const { rows: updated } = await getPool().query(
+  const { rows: updated } = await query(
     'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
     [status, req.params.id]
   );
-  const { rows: details } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [req.params.id]);
+  const { rows: details } = await query('SELECT * FROM order_details WHERE order_id = $1', [req.params.id]);
   updated[0].items = details;
   res.json(updated[0]);
 });
 
 // ── API: Dashboard ────────────────────────────────────────────
 app.get('/api/dashboard/summary', requireAuth, requireRole('admin', 'empleado'), async (_req, res, next) => {
-  const client = await getPool().connect();
   try {
-    const ventasHoy = (await client.query(
+    const ventasHoy = (await query(
       "SELECT COUNT(*)::int as count FROM orders WHERE created_at::date = CURRENT_DATE AND status != 'cancelado'"
-    )).rows[0].count;
-    const ingresosTotales = (await client.query(
+    )).rows[0]?.count || 0;
+    const ingresosTotales = (await query(
       "SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE status != 'cancelado'"
-    )).rows[0].total;
-    const pedidosActivos = (await client.query(
+    )).rows[0]?.total || 0;
+    const pedidosActivos = (await query(
       "SELECT COUNT(*)::int as count FROM orders WHERE status IN ('pendiente', 'confirmado', 'enviado')"
-    )).rows[0].count;
-    const productosVendidos = (await client.query(`
+    )).rows[0]?.count || 0;
+    const productosVendidos = (await query(`
       SELECT COALESCE(SUM(od.quantity), 0)::int as total
       FROM order_details od
       JOIN orders o ON o.id = od.order_id
       WHERE o.status != 'cancelado'
-    `)).rows[0].total;
-    const totalPedidos = (await client.query('SELECT COUNT(*)::int as count FROM orders')).rows[0].count;
+    `)).rows[0]?.total || 0;
+    const totalPedidos = (await query('SELECT COUNT(*)::int as count FROM orders')).rows[0]?.count || 0;
     res.json({ ventasHoy, ingresosTotales, pedidosActivos, productosVendidos, totalPedidos });
   } catch (err) {
     next(err);
-  } finally {
-    client.release();
   }
 });
 
 app.get('/api/dashboard/sales-by-month', requireAuth, requireRole('admin', 'empleado'), async (req, res, next) => {
   try {
     const year = req.query.year || new Date().getFullYear();
-    const { rows } = await getPool().query(`
+    const { rows } = await query(`
       SELECT EXTRACT(MONTH FROM created_at)::int as mes,
              COALESCE(SUM(total_amount), 0) as cantidad,
              COUNT(*)::int as pedidos
@@ -644,11 +627,11 @@ app.get('/api/dashboard/sales-by-month', requireAuth, requireRole('admin', 'empl
 
 app.get('/api/dashboard/recent-orders', requireAuth, requireRole('admin', 'empleado'), async (_req, res, next) => {
   try {
-    const { rows: orders } = await getPool().query(
+    const { rows: orders } = await query(
       'SELECT * FROM orders ORDER BY created_at DESC LIMIT 5'
     );
     for (const order of orders) {
-      const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
+      const { rows: items } = await query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
       order.items = items;
     }
     res.json(orders);

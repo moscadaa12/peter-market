@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 # Supabase / Vercel
+.env
 .env.local
 .env*.local
 

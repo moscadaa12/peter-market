@@ -10,14 +10,14 @@ let bucketReady = false;
 const BUCKET = 'products';
 
 function getClient() {
-  if (!supabase && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
-    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+  if (!supabase && process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY) {
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SECRET_KEY);
   }
   return supabase;
 }
 
 function isAvailable() {
-  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY);
+  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
 }
 
 async function ensureBucket() {
