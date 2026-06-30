@@ -2,13 +2,15 @@ import express from 'express';
 import multer from 'multer';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
-import os from 'os';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { uploadBuffer, seedAllImages } from './storage.js';
 
 const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const JWT_SECRET = process.env.JWT_SECRET || 'peter-market-dev-secret-key';
 
 const app = express();
 
@@ -32,39 +34,29 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ── Auth Middleware ─────────────────────────────────────────────
-function decodeToken(token) {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    return JSON.parse(Buffer.from(parts[1], 'base64').toString());
-  } catch { return null; }
-}
-
-function optionalAuth(req, res, next) {
-  const header = req.headers.authorization;
-  if (header?.startsWith('Bearer ')) {
-    const payload = decodeToken(header.slice(7));
-    if (payload && payload.exp * 1000 > Date.now()) {
-      req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
-    }
-  }
-  next();
-}
-
+// ── JWT Auth Middleware ─────────────────────────────────────────
 function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Token requerido' });
   }
-  const payload = decodeToken(header.slice(7));
-  if (!payload) {
-    return res.status(401).json({ error: 'Token inválido' });
+  try {
+    const payload = jwt.verify(header.slice(7), JWT_SECRET);
+    req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Token inválido o expirado' });
   }
-  if (payload.exp * 1000 < Date.now()) {
-    return res.status(401).json({ error: 'Token expirado' });
+}
+
+function optionalAuth(req, res, next) {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(header.slice(7), JWT_SECRET);
+      req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
+    } catch {}
   }
-  req.user = { id: payload.sub, name: payload.name, email: payload.email, role: payload.role };
   next();
 }
 
@@ -95,17 +87,12 @@ function getPool() {
 
 // ── Init DB (lazy, on first request) ──────────────────────────
 let initialized = false;
-let initError = null;
 async function ensureDB(req, res, next) {
-  if (initError) {
-    return res.status(500).json({ error: 'Error de conexión con la base de datos', details: initError.message });
-  }
   if (!initialized) {
     try {
       await initDB();
       initialized = true;
     } catch (err) {
-      initError = err;
       console.error('DB init error:', err.message);
       return res.status(500).json({ error: 'Error de conexión con la base de datos', details: err.message });
     }
@@ -118,6 +105,14 @@ async function initDB() {
   const client = await getPool().connect();
   try {
     await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id    SERIAL PRIMARY KEY,
+        name  TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role  TEXT NOT NULL DEFAULT 'cliente' CHECK (role IN ('admin', 'empleado', 'cliente')),
+        created_at TIMESTAMP DEFAULT NOW()
+      );
       CREATE TABLE IF NOT EXISTS categories (
         id    SERIAL PRIMARY KEY,
         name  TEXT NOT NULL UNIQUE,
@@ -158,6 +153,29 @@ async function initDB() {
       CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
     `);
 
+    const { rows: userCount } = await client.query('SELECT COUNT(*)::int as count FROM users');
+    if (userCount[0].count === 0) {
+      const hashes = await Promise.all([
+        bcrypt.hash('admin123', 10),
+        bcrypt.hash('empleado123', 10),
+        bcrypt.hash('cliente123', 10),
+      ]);
+      await client.query(
+        'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
+        ['Admin Peter', 'admin@petermarket.pe', hashes[0], 'admin']
+      );
+      await client.query(
+        'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
+        ['Empleado Juan', 'empleado@petermarket.pe', hashes[1], 'empleado']
+      );
+      await client.query(
+        'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4)',
+        ['Cliente María', 'cliente@petermarket.pe', hashes[2], 'cliente']
+      );
+    }
+
+    const imageMap = await seedAllImages();
+
     const { rows: catCount } = await client.query('SELECT COUNT(*)::int as count FROM categories');
     if (catCount[0].count === 0) {
       const defaultCategories = [
@@ -196,7 +214,7 @@ async function initDB() {
         { name: 'Papel Higiénico Suave x 4 rollos', cat:4, price:6.80, stock:80, desc:'Papel higiénico doble hoja, suave y resistente.', img:'product-1782668179829.jpeg' },
         { name: 'Lavavajillas Ayudín x 500ml', cat:4, price:4.30, stock:35, desc:'Detergente líquido para vajilla, poder desengrasante.', img:'product-1782668160150.jpeg' },
         { name: 'Desinfectante Sapolio x 1L', cat:4, price:6.10, offer:5.30, stock:30, desc:'Desinfectante concentrado aroma a lavanda.', img:'product-1782668179829.jpeg' },
-        { name: 'Esponja Multiusos x 3', cat:4, price:2.50, stock:100, desc:'Esponjas para lavar vajilla, resistentes.', img:'product-1782668160150.jpeg' },
+        { name: 'Esponja Multiusos x 3', cat:4, price:2.50, stock:100, desc:'Esponjas para lavar vajilla, resistentes.', img:'product-1782668179829.jpeg' },
         { name: 'Bolsa de Basura x 10', cat:4, price:3.20, stock:90, desc:'Bolsas resistentes para residuos domésticos.', img:'product-1782668179829.jpeg' },
         { name: 'Gaseosa Inca Kola x 1L', cat:5, price:4.80, stock:75, desc:'Gaseosa peruana sabor único, bien fría.', img:'product-1782668133232.webp' },
         { name: 'Gaseosa Coca Cola x 1L', cat:5, price:5.20, offer:4.50, stock:75, desc:'Gaseosa carbonatada sabor clásico.', img:'product-1782668133232.webp' },
@@ -231,9 +249,10 @@ async function initDB() {
       ];
 
       for (const p of seedProducts) {
+        const imgUrl = imageMap[p.img] || `/images/products/${p.img}`;
         await client.query(
           'INSERT INTO products (name, category_id, price, offer_price, stock, description, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [p.name, p.cat, p.price, p.offer ?? null, p.stock, p.desc, '/images/products/' + p.img]
+          [p.name, p.cat, p.price, p.offer ?? null, p.stock, p.desc, imgUrl]
         );
       }
     }
@@ -242,23 +261,125 @@ async function initDB() {
   }
 }
 
-// ── Upload de imágenes ────────────────────────────────────────
-const UPLOAD_DIR = path.join(os.tmpdir(), 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-app.use('/images/products', express.static(UPLOAD_DIR, {
-  setHeaders(res) { res.set('Cache-Control', 'no-cache, no-store, must-revalidate'); },
-}));
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.jpg';
-    cb(null, `product-${Date.now()}${ext}`);
-  },
+// ── Auth routes ────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  }
+  const { rows: existing } = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
+  if (existing[0]) {
+    return res.status(400).json({ error: 'El email ya está registrado' });
+  }
+  const hash = await bcrypt.hash(password, 10);
+  const { rows } = await getPool().query(
+    'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at',
+    [name, email, hash, 'cliente']
+  );
+  const user = rows[0];
+  const token = jwt.sign(
+    { sub: user.id, name: user.name, email: user.email, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '24h' }
+  );
+  res.status(201).json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
 });
+
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
+  }
+  const { rows } = await getPool().query('SELECT * FROM users WHERE email = $1', [email]);
+  if (!rows[0]) {
+    return res.status(401).json({ error: 'Credenciales inválidas' });
+  }
+  const valid = await bcrypt.compare(password, rows[0].password_hash);
+  if (!valid) {
+    return res.status(401).json({ error: 'Credenciales inválidas' });
+  }
+  const user = rows[0];
+  const token = jwt.sign(
+    { sub: user.id, name: user.name, email: user.email, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '24h' }
+  );
+  res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const { rows } = await getPool().query(
+    'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
+    [req.user.id]
+  );
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+  res.json(rows[0]);
+});
+
+// ── Users CRUD (admin only) ────────────────────────────────────
+app.get('/api/auth/users', requireAuth, requireRole('admin'), async (_req, res) => {
+  const { rows } = await getPool().query(
+    'SELECT id, name, email, role, created_at FROM users ORDER BY id'
+  );
+  res.json(rows);
+});
+
+app.post('/api/auth/users', requireAuth, requireRole('admin'), async (req, res) => {
+  const { name, email, password, role } = req.body;
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Faltan campos obligatorios' });
+  }
+  const { rows: existing } = await getPool().query('SELECT id FROM users WHERE email = $1', [email]);
+  if (existing[0]) {
+    return res.status(400).json({ error: 'El email ya está registrado' });
+  }
+  const hash = await bcrypt.hash(password, 10);
+  const { rows } = await getPool().query(
+    'INSERT INTO users (name, email, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at',
+    [name, email, hash, role || 'cliente']
+  );
+  res.status(201).json(rows[0]);
+});
+
+app.put('/api/auth/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const { rows: existing } = await getPool().query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+  if (!existing[0]) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+  const { name, email, role, password } = req.body;
+  if (password) {
+    const hash = await bcrypt.hash(password, 10);
+    await getPool().query(
+      'UPDATE users SET name=$1, email=$2, role=$3, password_hash=$4 WHERE id=$5',
+      [name || existing[0].name, email || existing[0].email, role || existing[0].role, hash, req.params.id]
+    );
+  } else {
+    await getPool().query(
+      'UPDATE users SET name=$1, email=$2, role=$3 WHERE id=$4',
+      [name || existing[0].name, email || existing[0].email, role || existing[0].role, req.params.id]
+    );
+  }
+  const { rows: updated } = await getPool().query(
+    'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
+    [req.params.id]
+  );
+  res.json(updated[0]);
+});
+
+app.delete('/api/auth/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const { rows } = await getPool().query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+  await getPool().query('DELETE FROM users WHERE id = $1', [req.params.id]);
+  res.json({ message: 'Usuario eliminado' });
+});
+
+// ── Upload de imágenes ────────────────────────────────────────
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
@@ -267,10 +388,17 @@ const upload = multer({
 });
 
 app.post('/api/upload', requireAuth, requireRole('admin', 'empleado'), (req, res) => {
-  upload.single('image')(req, res, (err) => {
+  upload.single('image')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
-    res.json({ image_url: '/images/products/' + req.file.filename });
+
+    const ext = path.extname(req.file.originalname) || '.jpg';
+    const fileName = `product-${Date.now()}${ext}`;
+    const url = await uploadBuffer(req.file.buffer, fileName, req.file.mimetype);
+    if (!url) {
+      return res.status(500).json({ error: 'Error al subir la imagen al almacenamiento' });
+    }
+    res.json({ image_url: url });
   });
 });
 
@@ -464,7 +592,7 @@ app.put('/api/orders/:id/status', requireAuth, requireRole('admin', 'empleado'),
 });
 
 // ── API: Dashboard ────────────────────────────────────────────
-app.get('/api/dashboard/summary', requireAuth, requireRole('admin', 'empleado'), async (_req, res) => {
+app.get('/api/dashboard/summary', requireAuth, requireRole('admin', 'empleado'), async (_req, res, next) => {
   const client = await getPool().connect();
   try {
     const ventasHoy = (await client.query(
@@ -484,39 +612,57 @@ app.get('/api/dashboard/summary', requireAuth, requireRole('admin', 'empleado'),
     `)).rows[0].total;
     const totalPedidos = (await client.query('SELECT COUNT(*)::int as count FROM orders')).rows[0].count;
     res.json({ ventasHoy, ingresosTotales, pedidosActivos, productosVendidos, totalPedidos });
+  } catch (err) {
+    next(err);
   } finally {
     client.release();
   }
 });
 
-app.get('/api/dashboard/sales-by-month', requireAuth, requireRole('admin', 'empleado'), async (req, res) => {
-  const year = req.query.year || new Date().getFullYear();
-  const { rows } = await getPool().query(`
-    SELECT EXTRACT(MONTH FROM created_at)::int as mes,
-           COALESCE(SUM(total_amount), 0) as cantidad,
-           COUNT(*)::int as pedidos
-    FROM orders
-    WHERE EXTRACT(YEAR FROM created_at) = $1 AND status != 'cancelado'
-    GROUP BY EXTRACT(MONTH FROM created_at)
-    ORDER BY mes
-  `, [String(year)]);
+app.get('/api/dashboard/sales-by-month', requireAuth, requireRole('admin', 'empleado'), async (req, res, next) => {
+  try {
+    const year = req.query.year || new Date().getFullYear();
+    const { rows } = await getPool().query(`
+      SELECT EXTRACT(MONTH FROM created_at)::int as mes,
+             COALESCE(SUM(total_amount), 0) as cantidad,
+             COUNT(*)::int as pedidos
+      FROM orders
+      WHERE EXTRACT(YEAR FROM created_at) = $1 AND status != 'cancelado'
+      GROUP BY EXTRACT(MONTH FROM created_at)
+      ORDER BY mes
+    `, [String(year)]);
 
-  const fullYear = Array.from({ length: 12 }, (_, i) => {
-    const found = rows.find((r) => r.mes === i + 1);
-    return { mes: i + 1, cantidad: found ? Number(found.cantidad) : 0, pedidos: found ? found.pedidos : 0 };
-  });
-  res.json(fullYear);
+    const fullYear = Array.from({ length: 12 }, (_, i) => {
+      const found = rows.find((r) => r.mes === i + 1);
+      return { mes: i + 1, cantidad: found ? Number(found.cantidad) : 0, pedidos: found ? found.pedidos : 0 };
+    });
+    res.json(fullYear);
+  } catch (err) {
+    next(err);
+  }
 });
 
-app.get('/api/dashboard/recent-orders', requireAuth, requireRole('admin', 'empleado'), async (_req, res) => {
-  const { rows: orders } = await getPool().query(
-    'SELECT * FROM orders ORDER BY created_at DESC LIMIT 5'
-  );
-  for (const order of orders) {
-    const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
-    order.items = items;
+app.get('/api/dashboard/recent-orders', requireAuth, requireRole('admin', 'empleado'), async (_req, res, next) => {
+  try {
+    const { rows: orders } = await getPool().query(
+      'SELECT * FROM orders ORDER BY created_at DESC LIMIT 5'
+    );
+    for (const order of orders) {
+      const { rows: items } = await getPool().query('SELECT * FROM order_details WHERE order_id = $1', [order.id]);
+      order.items = items;
+    }
+    res.json(orders);
+  } catch (err) {
+    next(err);
   }
-  res.json(orders);
+});
+
+// ── Error handler global ─────────────────────────────────────
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error:', err);
+  res.status(err.status || err.statusCode || 500).json({
+    error: err.message || 'Error interno del servidor',
+  });
 });
 
 // ── Iniciar servidor (local) / Exportar (Vercel) ──────────────

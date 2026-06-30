@@ -7,7 +7,7 @@ import {
   People as PeopleIcon, ShoppingCart as ShoppingCartIcon,
   AttachMoney as AttachMoneyIcon, LocalShipping as LocalShippingIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../hooks/useAuth';
+import api from '../../api/axios';
 import { formatCurrency } from '../../utils/helpers';
 
 const clientOrders = {
@@ -18,13 +18,13 @@ const clientOrders = {
 };
 
 export default function Clientes() {
-  const { getAllUsers } = useAuth();
   const [clients, setClients] = useState([]);
 
   useEffect(() => {
-    const all = getAllUsers();
-    setClients(all.filter((u) => u.role === 'cliente'));
-  }, [getAllUsers]);
+    api.get('/auth/users')
+      .then((res) => setClients(res.data.filter((u) => u.role === 'cliente')))
+      .catch(() => setClients([]));
+  }, []);
 
   const totalClients = clients.length;
   const totalOrders = clients.reduce((sum, c) => sum + (clientOrders[c.id]?.orders || 0), 0);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box, Paper, Typography, Table, TableHead, TableRow, TableCell, TableBody,
   Chip, IconButton, Button, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -7,7 +7,7 @@ import {
 import {
   Edit as EditIcon, Delete as DeleteIcon, PersonAdd as PersonAddIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../hooks/useAuth';
+import api from '../../api/axios';
 
 const roleColors = {
   admin: { color: '#ef6c00', bg: 'rgba(239, 108, 0, 0.1)' },
@@ -16,21 +16,24 @@ const roleColors = {
 };
 
 export default function Usuarios() {
-  const { getAllUsers } = useAuth();
   const [users, setUsers] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [form, setForm] = useState({ name: '', email: '', role: 'cliente', password: '' });
 
-  useEffect(() => {
-    setUsers(getAllUsers());
-  }, [getAllUsers]);
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await api.get('/auth/users');
+      setUsers(res.data);
+    } catch {
+      setUsers([]);
+    }
+  }, []);
 
-  const persistUsers = (updated) => {
-    setUsers(updated);
-    localStorage.setItem('peter-market-users', JSON.stringify(updated));
-  };
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
 
   const openCreate = () => {
     setEditingUser(null);
@@ -44,33 +47,48 @@ export default function Usuarios() {
     setDialogOpen(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name.trim() || !form.email.trim()) {
       setSnackbar({ open: true, message: 'Nombre y correo son obligatorios.', severity: 'error' });
       return;
     }
-
-    if (editingUser) {
-      const updated = users.map((u) =>
-        u.id === editingUser.id ? { ...u, name: form.name.trim(), email: form.email.trim(), role: form.role } : u
-      );
-      persistUsers(updated);
-      setSnackbar({ open: true, message: 'Usuario actualizado.', severity: 'success' });
-    } else {
-      if (!form.password) {
-        setSnackbar({ open: true, message: 'La contraseña es obligatoria.', severity: 'error' });
-        return;
+    try {
+      if (editingUser) {
+        await api.put(`/auth/users/${editingUser.id}`, {
+          name: form.name.trim(),
+          email: form.email.trim(),
+          role: form.role,
+          ...(form.password ? { password: form.password } : {}),
+        });
+        setSnackbar({ open: true, message: 'Usuario actualizado.', severity: 'success' });
+      } else {
+        if (!form.password) {
+          setSnackbar({ open: true, message: 'La contraseña es obligatoria.', severity: 'error' });
+          return;
+        }
+        await api.post('/auth/users', {
+          name: form.name.trim(),
+          email: form.email.trim(),
+          role: form.role,
+          password: form.password,
+        });
+        setSnackbar({ open: true, message: 'Usuario creado.', severity: 'success' });
       }
-      const newUser = { id: Date.now(), name: form.name.trim(), email: form.email.trim(), role: form.role };
-      persistUsers([...users, newUser]);
-      setSnackbar({ open: true, message: 'Usuario creado.', severity: 'success' });
+      setDialogOpen(false);
+      fetchUsers();
+    } catch (err) {
+      setSnackbar({ open: true, message: err.response?.data?.error || 'Error al guardar', severity: 'error' });
     }
-    setDialogOpen(false);
   };
 
-  const handleDelete = (id) => {
-    persistUsers(users.filter((u) => u.id !== id));
-    setSnackbar({ open: true, message: 'Usuario eliminado.', severity: 'info' });
+  const handleDelete = async (id) => {
+    try {
+      await api.delete(`/auth/users/${id}`);
+      setSnackbar({ open: true, message: 'Usuario eliminado.', severity: 'info' });
+      fetchUsers();
+    } catch (err) {
+      setSnackbar({ open: true, message: err.response?.data?.error || 'Error al eliminar', severity: 'error' });
+    }
   };
 
   return (
@@ -149,6 +167,12 @@ export default function Usuarios() {
           {!editingUser && (
             <TextField
               fullWidth label="Contraseña" type="password" value={form.password}
+              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} margin="normal"
+            />
+          )}
+          {editingUser && (
+            <TextField
+              fullWidth label="Nueva contraseña (dejar vacío para no cambiar)" type="password" value={form.password}
               onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))} margin="normal"
             />
           )}

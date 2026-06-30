@@ -2,6 +2,15 @@
 -- Ejecutar en: Supabase Dashboard > SQL Editor
 
 -- ── Tablas ───────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS users (
+  id    SERIAL PRIMARY KEY,
+  name  TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role  TEXT NOT NULL DEFAULT 'cliente' CHECK (role IN ('admin', 'empleado', 'cliente')),
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS categories (
   id    SERIAL PRIMARY KEY,
   name  TEXT NOT NULL UNIQUE,
@@ -45,6 +54,13 @@ CREATE TABLE IF NOT EXISTS order_details (
   unit_price  NUMERIC(10,2) NOT NULL,
   subtotal    NUMERIC(10,2) NOT NULL
 );
+
+-- ── Seed: Usuarios por defecto ───────────────────────────────
+INSERT INTO users (name, email, password_hash, role) VALUES
+  ('Admin Peter', 'admin@petermarket.pe', '$2a$10$dummy_hash_admin', 'admin'),
+  ('Empleado Juan', 'empleado@petermarket.pe', '$2a$10$dummy_hash_empleado', 'empleado'),
+  ('Cliente María', 'cliente@petermarket.pe', '$2a$10$dummy_hash_cliente', 'cliente')
+ON CONFLICT (email) DO NOTHING;
 
 -- ── Seed: Categorías ─────────────────────────────────────────
 INSERT INTO categories (name) VALUES
