@@ -193,7 +193,6 @@ async function initDB() {
           'INSERT INTO products (name, category_id, price, offer_price, stock, description, image_url) VALUES ($1,$2,$3,$4,$5,$6,$7)',
           [p.name, p.cat, p.price, p.offer ?? null, p.stock, p.desc, imgUrl]
         );
-      }
     }
   }
 }
