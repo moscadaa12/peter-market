@@ -1,21 +1,26 @@
-import { createClient } from '@supabase/supabase-js'
+import pkg from 'pg';
+const { Pool } = pkg;
 
-let _supabase
+let pool;
 
-function getClient() {
-  if (!_supabase) {
-    _supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SECRET_KEY
-    )
+function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    });
   }
-  return _supabase
+  return pool;
 }
 
-export async function query(sql, params = []) {
-  const { data, error } = await getClient().rpc('exec_sql', { sql, params })
-  if (error) throw error
-  return { rows: data || [] }
+export async function query(text, params) {
+  const client = await getPool().connect();
+  try {
+    const result = await client.query(text, params);
+    return result;
+  } finally {
+    client.release();
+  }
 }
 
-export default getClient
+export default query;

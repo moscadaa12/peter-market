@@ -2,9 +2,15 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "devCommand": "npm run dev",
+  "framework": "vite",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api" },
     { "source": "/images/products/(.*)", "destination": "/api" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 30
+    }
+  }
 }

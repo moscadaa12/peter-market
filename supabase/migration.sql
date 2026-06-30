@@ -1,46 +1,53 @@
--- ============================================================
--- Ejecutar UNA VEZ en Supabase SQL Editor (Dashboard > SQL Editor)
--- Crea la función exec_sql para que el backend pueda hacer
--- consultas SQL vía la API REST (HTTPS).
--- ============================================================
+-- Ejecutar UNA VEZ en Supabase SQL Editor
+CREATE TABLE IF NOT EXISTS users (
+  id    SERIAL PRIMARY KEY,
+  name  TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role  TEXT NOT NULL DEFAULT 'cliente' CHECK (role IN ('admin', 'empleado', 'cliente')),
+  created_at TIMESTAMP DEFAULT NOW()
+);
 
-CREATE OR REPLACE FUNCTION exec_sql(sql TEXT, params JSONB DEFAULT '[]'::jsonb)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  r RECORD;
-  results JSONB := '[]'::jsonb;
-  final_sql TEXT;
-  i INT;
-BEGIN
-  final_sql := sql;
+CREATE TABLE IF NOT EXISTS categories (
+  id    SERIAL PRIMARY KEY,
+  name  TEXT NOT NULL UNIQUE,
+  description TEXT
+);
 
-  IF params IS NOT NULL AND jsonb_typeof(params) = 'array' THEN
-    FOR i IN 0..jsonb_array_length(params) - 1 LOOP
-      IF jsonb_typeof(params -> i) = 'null' THEN
-        final_sql := replace(final_sql, '$' || (i + 1), 'NULL');
-      ELSIF jsonb_typeof(params -> i) = 'number' THEN
-        final_sql := replace(final_sql, '$' || (i + 1), params ->> i);
-      ELSIF jsonb_typeof(params -> i) = 'boolean' THEN
-        final_sql := replace(final_sql, '$' || (i + 1), CASE WHEN (params ->> i)::boolean THEN 'TRUE' ELSE 'FALSE' END);
-      ELSE
-        final_sql := replace(final_sql, '$' || (i + 1), quote_literal(params ->> i));
-      END IF;
-    END LOOP;
-  END IF;
+CREATE TABLE IF NOT EXISTS products (
+  id          SERIAL PRIMARY KEY,
+  category_id INTEGER NOT NULL REFERENCES categories(id),
+  name        TEXT NOT NULL,
+  description TEXT,
+  price       NUMERIC(10,2) NOT NULL,
+  offer_price NUMERIC(10,2),
+  stock       INTEGER NOT NULL DEFAULT 0,
+  image_url   TEXT,
+  is_active   INTEGER NOT NULL DEFAULT 1,
+  created_at  TIMESTAMP DEFAULT NOW()
+);
 
-  BEGIN
-    FOR r IN EXECUTE final_sql LOOP
-      results := results || row_to_json(r)::jsonb;
-    END LOOP;
-  EXCEPTION WHEN OTHERS THEN
-    EXECUTE final_sql;
-    results := '[]'::jsonb;
-  END;
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
 
-  RETURN results;
-END;
-$$;
+CREATE TABLE IF NOT EXISTS orders (
+  id               SERIAL PRIMARY KEY,
+  user_id          INTEGER,
+  user_name        TEXT,
+  total_amount     NUMERIC(10,2) NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pendiente',
+  delivery_address TEXT,
+  delivery_cost    NUMERIC(10,2) NOT NULL DEFAULT 0,
+  created_at       TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS order_details (
+  id          SERIAL PRIMARY KEY,
+  order_id    INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  product_id  INTEGER,
+  product_name TEXT,
+  quantity    INTEGER NOT NULL,
+  unit_price  NUMERIC(10,2) NOT NULL,
+  subtotal    NUMERIC(10,2) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
