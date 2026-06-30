@@ -85,22 +85,29 @@ function getPool() {
       connectionString: process.env.DATABASE_URL,
       max: 1,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 15000,
       ssl: { rejectUnauthorized: false },
     });
+    pool.on('error', (err) => console.error('Pool error:', err.message));
   }
   return pool;
 }
 
 // ── Init DB (lazy, on first request) ──────────────────────────
 let initialized = false;
+let initError = null;
 async function ensureDB(req, res, next) {
+  if (initError) {
+    return res.status(500).json({ error: 'Error de conexión con la base de datos', details: initError.message });
+  }
   if (!initialized) {
     try {
       await initDB();
       initialized = true;
     } catch (err) {
-      console.error('DB init error:', err);
+      initError = err;
+      console.error('DB init error:', err.message);
+      return res.status(500).json({ error: 'Error de conexión con la base de datos', details: err.message });
     }
   }
   next();
@@ -265,6 +272,18 @@ app.post('/api/upload', requireAuth, requireRole('admin', 'empleado'), (req, res
     if (!req.file) return res.status(400).json({ error: 'No se envió ninguna imagen' });
     res.json({ image_url: '/images/products/' + req.file.filename });
   });
+});
+
+// ── Health check ─────────────────────────────────────────────
+app.get('/api/health', async (_req, res) => {
+  try {
+    const client = await getPool().connect();
+    const { rows } = await client.query('SELECT NOW() as time');
+    client.release();
+    res.json({ status: 'ok', db: rows[0].time });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
+  }
 });
 
 // ── API: Categorías ──────────────────────────────────────────
