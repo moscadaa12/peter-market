@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, CloudUpload as CloudUploadIcon } from '@mui/icons-material';
+import api from '../../api/axios';
 import { formatCurrency } from '../../utils/helpers';
 import getProductImageUrl from '../../utils/productImages';
 import { useAuth } from '../../hooks/useAuth';
@@ -41,10 +42,10 @@ export default function Productos() {
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('/api/products');
-      setProducts(await res.json());
+      const res = await api.get('/products');
+      setProducts(res.data);
     } catch {
-      setSnack({ open: true, msg: 'Error al cargar productos. Asegúrate de ejecutar: npm run dev:server', severity: 'error' });
+      setSnack({ open: true, msg: 'Error al cargar productos.', severity: 'error' });
     } finally {
       setLoading(false);
     }
@@ -59,18 +60,12 @@ export default function Productos() {
     try {
       const formData = new FormData();
       formData.append('image', file);
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Error al subir la imagen');
-      }
-      const data = await res.json();
-      setForm((prev) => ({ ...prev, imagen: data.image_url }));
-    } catch (err) {
-      const msg = err.message.includes('Failed to fetch') || err.message.includes('NetworkError')
-        ? 'No se pudo conectar con el servidor de uploads. Ejecuta: npm run dev:server'
-        : err.message;
-      setSnack({ open: true, msg: 'Error al subir la imagen: ' + msg, severity: 'error' });
+      const res = await api.post('/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setForm((prev) => ({ ...prev, imagen: res.data.image_url }));
+    } catch {
+      setSnack({ open: true, msg: 'Error al subir la imagen.', severity: 'error' });
     } finally {
       setUploading(false);
     }
@@ -121,36 +116,23 @@ export default function Productos() {
 
     try {
       if (editId) {
-        const res = await fetch(`/api/products/${editId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error('Error al actualizar');
-        const updated = await res.json();
-        setProducts((prev) => prev.map((p) => (p.id === editId ? updated : p)));
+        const res = await api.put(`/products/${editId}`, body);
+        setProducts((prev) => prev.map((p) => (p.id === editId ? res.data : p)));
         setSnack({ open: true, msg: 'Producto actualizado correctamente', severity: 'success' });
       } else {
-        const res = await fetch('/api/products', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error('Error al crear');
-        const created = await res.json();
-        setProducts((prev) => [...prev, created]);
+        const res = await api.post('/products', body);
+        setProducts((prev) => [...prev, res.data]);
         setSnack({ open: true, msg: 'Producto creado correctamente', severity: 'success' });
       }
       handleClose();
     } catch {
-      setSnack({ open: true, msg: 'Error de conexión con el servidor. Ejecuta: npm run dev:server', severity: 'error' });
+      setSnack({ open: true, msg: 'Error de conexión con el servidor.', severity: 'error' });
     }
   };
 
   const handleDelete = async (id) => {
     try {
-      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Error al eliminar');
+      await api.delete(`/products/${id}`);
       setProducts((prev) => prev.filter((p) => p.id !== id));
       setSnack({ open: true, msg: 'Producto eliminado', severity: 'info' });
     } catch {

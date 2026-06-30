@@ -11,6 +11,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
+import api from '../../api/axios';
 import { useAuth } from '../../hooks/useAuth';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 
@@ -47,14 +48,18 @@ export default function Dashboard() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/dashboard/summary').then((r) => r.json()),
-      fetch('/api/dashboard/sales-by-month').then((r) => r.json()),
-      fetch('/api/dashboard/recent-orders').then((r) => r.json()),
+      api.get('/dashboard/summary').then((r) => r.data),
+      api.get('/dashboard/sales-by-month').then((r) => r.data),
+      api.get('/dashboard/recent-orders').then((r) => r.data),
     ]).then(([s, m, o]) => {
-      setSummary(s);
-      setMonthlySales(m);
-      setRecentOrders(o);
-    }).catch(() => {}).finally(() => setLoading(false));
+      setSummary(s && typeof s === 'object' ? s : null);
+      setMonthlySales(Array.isArray(m) ? m : []);
+      setRecentOrders(Array.isArray(o) ? o : []);
+    }).catch(() => {
+      setSummary(null);
+      setMonthlySales([]);
+      setRecentOrders([]);
+    }).finally(() => setLoading(false));
   }, []);
 
   const summaryCards = summary ? summaryDefs.map((def) => {

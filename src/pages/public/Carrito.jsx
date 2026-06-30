@@ -8,6 +8,7 @@ import {
   Delete as DeleteIcon, Add as AddIcon, Remove as RemoveIcon,
   LocalShipping as LocalShippingIcon, CheckCircle as CheckCircleIcon,
 } from '@mui/icons-material';
+import api from '../../api/axios';
 import { useCart } from '../../hooks/useCart';
 import { useAuth } from '../../hooks/useAuth';
 import { formatCurrency } from '../../utils/helpers';
@@ -35,17 +36,12 @@ export default function Carrito() {
         delivery_address: address,
         delivery_cost: deliveryFree ? 0 : deliveryCost,
       };
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error('Error al procesar el pedido');
+      await api.post('/orders', body);
       setCheckoutOpen(false);
       clearCart();
       setSnackbar({ open: true, message: '¡Compra realizada con éxito! Recibirás tu pedido pronto.' });
     } catch {
-      setSnackbar({ open: true, message: 'Error al procesar el pedido. Asegúrate de ejecutar: npm run dev:server' });
+      setSnackbar({ open: true, message: 'Error al procesar el pedido.' });
     }
   };
 

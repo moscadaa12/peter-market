@@ -8,6 +8,7 @@ import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
   Category as CategoryIcon,
 } from '@mui/icons-material';
+import api from '../../api/axios';
 import { useAuth } from '../../hooks/useAuth';
 
 export default function Categorias() {
@@ -20,9 +21,8 @@ export default function Categorias() {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   const fetchCategories = () => {
-    fetch('/api/categories')
-      .then((r) => r.json())
-      .then(setCategories)
+    api.get('/categories')
+      .then((r) => setCategories(r.data))
       .catch(() => setCategories([]));
   };
 
@@ -48,19 +48,9 @@ export default function Categorias() {
 
     try {
       if (editingCat) {
-        const res = await fetch(`/api/categories/${editingCat.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: form.name.trim() }),
-        });
-        if (!res.ok) throw new Error();
+        await api.put(`/categories/${editingCat.id}`, { name: form.name.trim() });
       } else {
-        const res = await fetch('/api/categories', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: form.name.trim() }),
-        });
-        if (!res.ok) throw new Error();
+        await api.post('/categories', { name: form.name.trim() });
       }
       fetchCategories();
       setDialogOpen(false);
@@ -72,8 +62,7 @@ export default function Categorias() {
 
   const handleDelete = async (id) => {
     try {
-      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error();
+      await api.delete(`/categories/${id}`);
       fetchCategories();
       setSnackbar({ open: true, message: 'Categoría eliminada.', severity: 'info' });
     } catch {

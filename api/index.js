@@ -18,6 +18,9 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3000',
   ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
 ];
+if (process.env.VERCEL_URL) {
+  ALLOWED_ORIGINS.push(`https://${process.env.VERCEL_URL}`);
+}
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
@@ -83,6 +86,7 @@ function getPool() {
       max: 1,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
+      ssl: { rejectUnauthorized: false },
     });
   }
   return pool;

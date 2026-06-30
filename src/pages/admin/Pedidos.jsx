@@ -4,6 +4,7 @@ import {
   TableBody, Chip, Box, IconButton, Menu, MenuItem, Snackbar, Alert,
 } from '@mui/material';
 import { MoreVert as MoreVertIcon, ShoppingCart as ShoppingCartIcon } from '@mui/icons-material';
+import api from '../../api/axios';
 import { formatDate, formatCurrency } from '../../utils/helpers';
 
 const STATUS_FLOW = ['pendiente', 'confirmado', 'enviado', 'entregado'];
@@ -31,9 +32,8 @@ export default function Pedidos() {
   const [snack, setSnack] = useState({ open: false, msg: '', severity: 'success' });
 
   const fetchOrders = () => {
-    fetch('/api/orders')
-      .then((r) => r.json())
-      .then(setOrders)
+    api.get('/orders')
+      .then((r) => setOrders(r.data))
       .catch(() => setOrders([]));
   };
 
@@ -48,12 +48,7 @@ export default function Pedidos() {
     setAnchorEl(null);
     if (!selectedOrder) return;
     try {
-      const res = await fetch(`/api/orders/${selectedOrder.id}/status`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) throw new Error();
+      await api.put(`/orders/${selectedOrder.id}/status`, { status: newStatus });
       fetchOrders();
       setSnack({ open: true, msg: `Pedido #${selectedOrder.id} marcado como "${statusLabels[newStatus]}".`, severity: 'success' });
     } catch {
