@@ -15,7 +15,7 @@ function getClient() {
 export async function query(sql, params = []) {
   const { data, error } = await getClient().rpc('exec_sql', {
     sql,
-    params: JSON.stringify(params),
+    params,
   })
   if (error) throw error
   return { rows: data || [] }
