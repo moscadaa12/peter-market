@@ -7,6 +7,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from './db.js';
 import { uploadBuffer, seedAllImages } from './storage.js';
+import 'dotenv/config';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const JWT_SECRET = process.env.JWT_SECRET || 'peter-market-dev-secret-key';
 
