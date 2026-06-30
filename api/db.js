@@ -12,13 +12,4 @@ function getClient() {
   return _supabase
 }
 
-export async function query(sql, params = []) {
-  const { data, error } = await getClient().rpc('exec_sql', {
-    sql,
-    params,
-  })
-  if (error) throw error
-  return { rows: data || [] }
-}
-
 export default getClient
